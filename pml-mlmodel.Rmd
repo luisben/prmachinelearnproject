@@ -1,0 +1,63 @@
+---
+title: "Classification of Weight Lifting Performing Quality"
+output: html_document
+---
+```{r loadlibraries, warning=FALSE}
+library(MASS)
+library(rpart)
+```
+In this report it will be shown the process of building a simple machine learning algorithm to classify data from the 'Weight Lifting Exercise Dataset'. This dataset contains data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, which performed some weight lifting exercises with varying degrees of quality. Our algorithm will learn from a dataset of around 19000 observations, and will then attempt to classify 20 new transactions into their corresponding quality level.
+
+Our first step is loading the data. For this case, the first 7 columns are removed, this is because these are timestamps and user identifiers, which are evidently not useful for the classification of whether the exercise was performed correctly or not. The variables are also converted to numeric values, and NA values replaced with zeros.
+
+```{r loaddata}
+pmlTrain <- read.csv("pml-training.csv")
+pmlTrain <- pmlTrain[,-c(1:7)]
+pmlTrain[,-153] <- sapply(pmlTrain[,-153],as.numeric)
+
+pmlTest <- read.csv("pml-testing.csv")
+pmlTest <- pmlTest[,-c(1:7)]
+pmlTest[,-153] <- sapply(pmlTest[,-153],as.numeric)
+```
+
+The first step in building the classifier will be the selection of features. One method that in the past has worked well for me is backward elimination. This process basically means fitting a linear model using all available variables, then looking for the variable with the highest p-value. If it is not statistically significant, it is removed from the list of variables, and the model is fitted again with the remaining ones. This process is repeated until all variables have significant p-values when fitted into the model.
+
+Luckily for us, R provides methods to do this whole process with a single call. Otherwise we would find ourselves fitting dozens of models when doing this for our 160-variable dataset. After that all NA values are imputed to zero.
+```{r getfeatures,results='hide'}
+fit <- glm(as.numeric(classe) ~ .,data=pmlTrain,na.action=na.omit)
+step <- stepAIC(fit,direction="both")
+step$formula
+pmlTrain[is.na(pmlTrain)] <- 0
+pmlTest[is.na(pmlTest)] <- 0
+```
+
+After trying with several type of models, we will be using a recursive partitioning tree as our learning model. The formula entered is the one obtained with backwards elimination. We tested with a generalized linear model, and a neural network, but the highest accuracy on the crossvalidation on training set was obtained with a CART model (classification and regression tree).
+```{r buildmodel}
+modelRP <- rpart(classe ~ roll_belt + pitch_belt + yaw_belt + kurtosis_picth_belt + max_roll_belt + min_pitch_belt + var_total_accel_belt + stddev_roll_belt +  var_roll_belt + avg_pitch_belt + var_pitch_belt + stddev_yaw_belt + var_yaw_belt + gyros_belt_x + accel_belt_x + accel_belt_y + accel_belt_z + magnet_belt_y + magnet_belt_z + roll_arm + pitch_arm + yaw_arm + stddev_roll_arm + var_roll_arm + avg_pitch_arm + stddev_yaw_arm + var_yaw_arm + gyros_arm_x + gyros_arm_y + accel_arm_z + magnet_arm_x + magnet_arm_y + magnet_arm_z + kurtosis_picth_arm + max_picth_arm + min_roll_arm + min_pitch_arm + amplitude_roll_arm + roll_dumbbell + yaw_dumbbell + max_picth_dumbbell + min_pitch_dumbbell + amplitude_pitch_dumbbell + amplitude_yaw_dumbbell + total_accel_dumbbell + avg_roll_dumbbell + stddev_roll_dumbbell + stddev_pitch_dumbbell + var_pitch_dumbbell + stddev_yaw_dumbbell + var_yaw_dumbbell + gyros_dumbbell_x + gyros_dumbbell_y + gyros_dumbbell_z + accel_dumbbell_x + accel_dumbbell_y + accel_dumbbell_z + magnet_dumbbell_x + magnet_dumbbell_z + kurtosis_picth_forearm + skewness_pitch_forearm + max_yaw_forearm + min_pitch_forearm + total_accel_forearm + avg_roll_forearm + stddev_roll_forearm + var_roll_forearm + avg_pitch_forearm + stddev_pitch_forearm + var_pitch_forearm + avg_yaw_forearm + stddev_yaw_forearm + var_yaw_forearm + gyros_forearm_x + accel_forearm_y + accel_forearm_z + magnet_forearm_y + magnet_forearm_z,data=pmlTrain,method="class",control=rpart.control(cp=0.001))
+```
+
+We can review our model by plotting two things:
+1) The change in the relative error and the Complexity Parameter (CP) as the three grows.  The complexity parameter is the factor by which the splitting of a node reduces the relative error. (i.e. reducing relative error from .35 to .2 gives a CP of .15)
+2) The table of CP values where we can see the cross validation error and the CP value attained in every level of the tree. 
+```{r plots}
+plotcp(modelRP)
+printcp(modelRP)
+
+```
+
+From these values we select an appropiate CP level, and will prune the tree at that cP. All nodes with CP value smaller than the one selected will be removed from the tree. Finding a good balance in this value is important to avoid overfitting. After pruning we plot the tree to have a visual idea of how it looks.
+
+```{r prunetree}
+minCP <- modelRP$cptable[which.min(modelRP$cptable[,"xerror"]),"CP"]
+modelRP <- prune(modelRP,cp=minCP)
+plot(modelRP)
+```
+
+Once the tree is pruned we can predict values for our existing test data. 
+The result is a matrix with one column per class and one row per observation in the new data. Each column in a row will indicate the probability of that row belonging to the class in its  column.
+
+```{r predict}
+predRP <- predict(modelRP,newdata=pmlTest[,labels(modelRP$terms)],type=c("prob"))
+predRP
+```
+
